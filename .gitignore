@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------------------
+#  Build output, tool databases and captured frames -- everything that can be
+#  regenerated from the sources in this repo.
+#
+#  Rule of thumb: if a tool created it, it does not belong in git.
+# ---------------------------------------------------------------------------
+
+# ---- Xilinx build trees -------------------------------------------------
+fpga/02_vivado/vivado/
+fpga/02_vivado/output/
+fpga/02_vivado/probe_cam/
+fpga/01_hls/proj_dehaze/
+fpga/03_baremetal/ws/
+fpga/04_camera/work/
+fpga/04_camera/.Xil/
+.Xil/
+*.Xil/
+
+# ---- tool logs and databases --------------------------------------------
+*.log
+*.jou
+*.pb
+*.dcp
+*.ltx
+*.rpx
+*.wdb
+*.str
+webtalk*
+usage_statistics*
+*.rpt
+
+# ---- bitstreams and board staging (built by the recipes) ----------------
+#  fpga/www is the staging directory board_run.ps1 fills with the bitstream and
+#  the ARM binaries; the analysis scripts kept there are sources.
+fpga/www/*
+!fpga/www/*.py
+fpga/pub/
+*.bit
+*.bin
+*.hdf
+*.xsa
+!fpga/01_hls/tv/meta.json
+
+# ---- generated HLS test vectors and golden images -----------------------
+#  Regenerate with: python fpga/00_tools/make_testvector.py
+fpga/01_hls/tv/*.npy
+fpga/01_hls/tv/*.u8
+fpga/01_hls/tv/*.png
+fpga/01_hls/tv/fog_in.bin
+fpga/01_hls/tv/hw_*
+
+# ---- raw captures and intermediate dumps --------------------------------
+*.bgr
+*.bmp
+fpga/output/*.bin
+fpga/output/*.bgr
+
+# ---- python -------------------------------------------------------------
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ---- editors / OS -------------------------------------------------------
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---- third-party reference dumps (never publish these) ----
+fpga/04_camera/ref/
+*_gbk.txt
+
+# ---- console transcripts from board sessions (debris, keep logs out of the repo) ----
+fpga/board_run_console*.txt
+fpga/*_console.txt

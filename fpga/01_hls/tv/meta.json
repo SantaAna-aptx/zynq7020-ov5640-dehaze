@@ -1,0 +1,17 @@
+{
+  "width": 1025,
+  "height": 720,
+  "patch": 15,
+  "omega_q8": 243,
+  "t0_q8": 26,
+  "gain_q8": 269,
+  "acomp_q8": 90,
+  "A_q8": [
+    184,
+    182,
+    181
+  ],
+  "dark_threshold": 173,
+  "n_top": 738,
+  "in_bytes": 2952000
+}

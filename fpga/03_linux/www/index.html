@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OV5640 + PL 去雾 · 实时预览</title>
+<!--
+  Static page: the board writes raw.bmp / out.bmp / stats.txt into this directory
+  once per dehazed frame, and the script below re-fetches them. No image codec is
+  involved anywhere -- a 24-bit BMP is a 54-byte header plus the pixels, so the
+  board needs no libjpeg/libpng and the browser needs no decoder.
+
+  The sliders post to a two-line CGI script on the board, which rewrites
+  params.cfg; dehaze_web picks it up on the next frame. That is how the dehazing
+  parameters are tuned: no bitstream reload, no re-synthesis, instant feedback.
+-->
+<style>
+  html, body { margin: 0; background: #0d0d0d; color: #dcdcdc;
+               font-family: Consolas, "Courier New", monospace; }
+  .bar { display: flex; gap: 20px; align-items: baseline; flex-wrap: wrap;
+         padding: 8px 14px; background: #171717; border-bottom: 1px solid #2a2a2a;
+         font-size: 14px; }
+  .bar .k { color: #7a8a96; }
+  .big { font-size: 19px; font-weight: bold; color: #4fdc9a; }
+  .dot { font-weight: bold; }
+  .ctl { display: flex; gap: 20px; align-items: center; flex-wrap: wrap;
+         padding: 8px 14px; background: #121212; border-bottom: 1px solid #222;
+         font-size: 13px; }
+  .ctl label { display: flex; gap: 7px; align-items: center; color: #9fb0bb; }
+  .ctl input[type=range] { width: 132px; }
+  .ctl .v { color: #4fdc9a; font-weight: bold; min-width: 40px; display: inline-block; }
+  .ctl button { background: #1e2a33; color: #bfd6e3; border: 1px solid #2f4654;
+                border-radius: 3px; padding: 3px 9px; cursor: pointer; font-family: inherit; }
+  .ctl button:hover { background: #26343d; }
+  .wrap { display: flex; gap: 6px; padding: 6px; }
+  .pane { flex: 1 1 0; min-width: 0; }
+  .pane h3 { margin: 2px 2px 5px; font-size: 13px; font-weight: normal; color: #8ab0c8; }
+  img { display: block; width: 100%; background: #000;
+        border: 1px solid #232323; box-sizing: border-box; }
+  .hint { color: #6d6d6d; font-size: 12.5px; padding: 2px 14px 16px; line-height: 1.7; }
+  code { color: #b9c6cf; background: #1b1b1b; padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <span class="dot" id="st" style="color:#fa4">连接中…</span>
+  <span><span class="k">刷新</span> <span class="big" id="fps">--</span> <span class="k">fps</span></span>
+  <span><span class="k">去雾耗时</span> <span class="big" id="core">--</span></span>
+  <span><span class="k">大气光 A(B,G,R)</span> <span id="a">--</span></span>
+  <span><span class="k">模式</span> <span id="mode">--</span></span>
+  <span><span class="k">分辨率</span> <span id="res">--</span></span>
+  <span><span class="k">ring 帧号</span> <span id="frames">--</span></span>
+</div>
+
+<div class="ctl">
+  <label>去雾强度 ω
+    <input type="range" id="s_omega" min="0" max="256" step="4" value="192">
+    <span class="v" id="v_omega">--</span>
+  </label>
+  <label>透射率下限 t₀
+    <input type="range" id="s_t0" min="5" max="140" step="1" value="64">
+    <span class="v" id="v_t0">--</span>
+  </label>
+  <label>增益
+    <input type="range" id="s_gain" min="128" max="420" step="2" value="269">
+    <span class="v" id="v_gain">--</span>
+  </label>
+  <label>A 彩度
+    <input type="range" id="s_acomp" min="0" max="256" step="4" value="90">
+    <span class="v" id="v_acomp">--</span>
+  </label>
+  <span>
+    <button onclick="preset(110,90,270,220)">弱</button>
+    <button onclick="preset(192,64,269,90)">标准</button>
+    <button onclick="preset(243,26,269,40)">强</button>
+    <button onclick="setMode(0)">mode 0</button>
+    <button onclick="setMode(1)">mode 1</button>
+  </span>
+</div>
+
+<div class="wrap">
+  <div class="pane">
+    <h3>① 摄像头原始帧（OV5640 RGB565 → 8bit）</h3>
+    <img id="raw" alt="waiting for raw.bmp ...">
+  </div>
+  <div class="pane">
+    <h3>② PL 去雾输出（HLS 核）</h3>
+    <img id="out" alt="waiting for out.bmp ...">
+  </div>
+</div>
+
+<div class="hint">
+  拖动滑块会立刻改写板子上的 <code>params.cfg</code>，下一帧生效 —— 不需要重烧位流。<br>
+  也可以用串口：<code>echo omega=160 &gt; /www/params.cfg</code>，或直接编辑 <code>/www/params.cfg</code>。
+</div>
+
+<script>
+// ---------------------------------------------------------------- two panes
+// Preload into a detached Image, and only swap the visible <img> once the new
+// bitmap has fully arrived: setting src directly makes the pane blink between
+// frames. The interval is fixed rather than "as fast as possible" so the board
+// is asked for a new pair at roughly the rate it can produce them.
+var REFRESH_MS = 250;
+var busy = { raw: false, out: false };
+
+function pump(id, file) {
+  if (busy[file]) return;
+  busy[file] = true;
+  var p = new Image();
+  var url = file + '.bmp?t=' + Date.now();
+  p.onload  = function () { document.getElementById(id).src = url; busy[file] = false; };
+  p.onerror = function () { busy[file] = false; };
+  p.src = url;
+}
+setInterval(function () { pump('raw', 'raw'); pump('out', 'out'); }, REFRESH_MS);
+
+// ---------------------------------------------------------------- controls
+var SLIDERS = ['s_omega', 's_t0', 's_gain', 's_acomp'];
+var pending = null;
+
+function showValues() {
+  document.getElementById('v_omega').textContent = document.getElementById('s_omega').value;
+  document.getElementById('v_t0').textContent    = document.getElementById('s_t0').value;
+  document.getElementById('v_gain').textContent  = document.getElementById('s_gain').value;
+  document.getElementById('v_acomp').textContent = document.getElementById('s_acomp').value;
+}
+
+function sendParams() {
+  var q = 'omega=' + document.getElementById('s_omega').value +
+          '&t0='    + document.getElementById('s_t0').value +
+          '&gain='  + document.getElementById('s_gain').value +
+          '&acomp=' + document.getElementById('s_acomp').value +
+          '&mode='  + (window.__mode === undefined ? 1 : window.__mode);
+  fetch('set.cgi?' + q, { cache: 'no-store' }).catch(function () {});
+  showValues();
+}
+
+function queueSend() {
+  if (pending) clearTimeout(pending);
+  pending = setTimeout(sendParams, 150);
+}
+
+SLIDERS.forEach(function (id) {
+  document.getElementById(id).addEventListener('input', queueSend);
+});
+
+function preset(omega, t0, gain, acomp) {
+  document.getElementById('s_omega').value = omega;
+  document.getElementById('s_t0').value    = t0;
+  document.getElementById('s_gain').value  = gain;
+  document.getElementById('s_acomp').value = acomp;
+  sendParams();
+}
+
+function setMode(m) {
+  window.__mode = m;
+  sendParams();
+}
+
+// ---------------------------------------------------------------- stats
+function field(text, key) {
+  var m = text.match(new RegExp(key + '=([^\\s]+)'));
+  return m ? m[1] : '--';
+}
+
+var firstSync = true;
+
+function pollStats() {
+  fetch('stats.txt?t=' + Date.now(), { cache: 'no-store' })
+    .then(function (r) { return r.text(); })
+    .then(function (t) {
+      document.getElementById('fps').textContent    = field(t, 'fps');
+      document.getElementById('core').textContent   = field(t, 'core');
+      document.getElementById('a').textContent      = field(t, 'A');
+      document.getElementById('mode').textContent   = field(t, 'mode');
+      document.getElementById('res').textContent    = field(t, 'res');
+      document.getElementById('frames').textContent = field(t, 'frames');
+      if (firstSync) {
+        // adopt the board's values once, so the sliders show what is really running
+        firstSync = false;
+        var vals = { s_omega: field(t, 'omega'), s_t0: field(t, 't0'),
+                     s_gain: field(t, 'gain'),  s_acomp: field(t, 'acomp') };
+        SLIDERS.forEach(function (id) {
+          if (vals[id] !== '--') document.getElementById(id).value = vals[id];
+        });
+        window.__mode = parseInt(field(t, 'mode'), 10);
+        if (isNaN(window.__mode)) window.__mode = 1;
+        sendParams();
+      }
+      showValues();
+      var st = document.getElementById('st');
+      st.textContent = '● 实时';
+      st.style.color = '#4fdc9a';
+    })
+    .catch(function () {
+      var st = document.getElementById('st');
+      st.textContent = '?? 板子没有响应（dehaze_web 停了吗？）';
+      st.style.color = '#fa4';
+    });
+  setTimeout(pollStats, 1000);
+}
+
+pollStats();
+</script>
+</body>
+</html>
