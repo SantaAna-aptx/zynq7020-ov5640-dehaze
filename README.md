@@ -65,19 +65,6 @@ fpga/
 
 ![board](docs/img/board_mode1.png)
 
-摄像头采集链路打通时的对比（色条测试图 vs 真实场景）：
-
-![capture](docs/img/board_capture.png)
-
-大气光估计修好前后的对比 —— 左二/左四是旧算法（白色物体被染绿），
-右下三张是新算法（白仍是白）：
-
-![v2](docs/img/dehaze_v2_param_compare.png)
-
-`acomp`（大气光彩度保留）对画面的影响：
-
-![v2b](docs/img/dehaze_v2_before_after.png)
-
 ---
 
 ## 第一部分：纯软件参考实现
